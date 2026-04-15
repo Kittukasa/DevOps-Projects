@@ -128,3 +128,4 @@ jobs:
         elif [[ ${{ github.ref }} == 'refs/heads/main' ]]; then
           aws s3 cp apk-files/main/ s3://android-apk-artifacts/main/ --recursive
         fi
+
