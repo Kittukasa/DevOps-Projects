@@ -16,14 +16,13 @@ env:
 
 jobs:
   build:
-    runs-on:
-       - ubuntu-latest
+    runs-on: ubuntu-latest
 
     steps:
-    - name : Check out Git Repository
+    - name: Check out Git Repository
       uses: actions/checkout@v3
 
-    - name: set up JDK 11
+    - name: Set up JDK 11
       uses: actions/setup-java@v3
       with:
         java-version: '11'
@@ -39,62 +38,53 @@ jobs:
     - name: Gradle Lint
       run: ./gradlew lint
       
-    - name: Gradle Build and generating apk files
+    - name: Gradle Build
       run: ./gradlew build
          
-    - name: Code Coverage test - Jacoco
+    - name: Code Coverage - Jacoco
       run: ./gradlew jacocoTest
       
     - name: Cache SonarQube packages
-      uses: actions/cache@v1
+      uses: actions/cache@v3
       with:
-          path: ~/.sonar/cache
-          key: ${{ runner.os }}-sonar
-          restore-keys: ${{ runner.os }}-sonar
-   
+        path: ~/.sonar/cache
+        key: ${{ runner.os }}-sonar
+        restore-keys: ${{ runner.os }}-sonar
    
     - name: Cache Gradle packages
-      uses: actions/cache@v1
+      uses: actions/cache@v3
       with:
-          path: ~/.gradle/caches
-          key: ${{ runner.os }}-gradle-${{ hashFiles('**/*.gradle') }}
-          restore-keys: ${{ runner.os }}-gradle
+        path: ~/.gradle/caches
+        key: ${{ runner.os }}-gradle-${{ hashFiles('**/*.gradle') }}
+        restore-keys: ${{ runner.os }}-gradle
           
-    - name: Code Scan Analysis - SonarQube
+    - name: SonarQube Analysis
       env:
-          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
-          SONAR_HOST_URL: ${{ secrets.SONAR_HOST_URL }}
+        SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+        SONAR_HOST_URL: ${{ secrets.SONAR_HOST_URL }}
       run: ./gradlew sonarqube -Dsonar.projectKey=android-demo-app
       
     - name: Date and Time
-      run: echo "::set-output name=current_date_time::$(date +"%d-%m-%Y-%H-%I-%M-%S")"
-      id : date
+      id: date
+      run: echo "current_date_time=$(date +"%d-%m-%Y-%H-%I-%M-%S")" >> $GITHUB_OUTPUT
 
-    - name: Copy APK files to a directory
+    - name: Copy APK files
       run: |
-         mkdir -p apk-files/debug apk-files/release
-         
-         cp ${{ github.workspace }}/app/build/outputs/apk/debug/app-debug.apk ${{ github.workspace }}/apk-files/debug/app-debug.apk 
-         mv ${{ github.workspace }}/apk-files/debug/app-debug.apk ${{ github.workspace }}/apk-files/debug/app-debug-${{ steps.date.outputs.current_date_time }}.apk
-         
-         cp ${{ github.workspace }}/app/build/outputs/apk/release/app-release-unsigned.apk ${{ github.workspace }}/apk-files/release/app-release-unsigned.apk
-         mv ${{ github.workspace }}/apk-files/release/app-release-unsigned.apk ${{ github.workspace }}/apk-files/release/app-release-unsigned-${{ steps.date.outputs.current_date_time }}.apk
+        mkdir -p apk-files/debug apk-files/release
+        cp ${{ github.workspace }}/app/build/outputs/apk/debug/app-debug.apk \
+           ${{ github.workspace }}/apk-files/debug/app-debug-${{ steps.date.outputs.current_date_time }}.apk
+        cp ${{ github.workspace }}/app/build/outputs/apk/release/app-release-unsigned.apk \
+           ${{ github.workspace }}/apk-files/release/app-release-unsigned-${{ steps.date.outputs.current_date_time }}.apk
       
-    - name: Upload apk-files Directory
+    - name: Upload APK artifact
       uses: actions/upload-artifact@v3
       with:
-        name: apk-files-artifactory
+        name: apk-files-s3
         path: ${{ github.workspace }}/apk-files/
         if-no-files-found: ignore
-      
-    - name : Notification to Teams
-      uses: toko-bifrost/ms-teams-deploy-card@master #  or "./" if in a local set-up
-      if: always()
-      with:
-          github-token: ${{ secrets.CI_GITHUB_TOKEN  }}
-          webhook-uri: ${{ secrets.MS_TEAMS_WEBHOOK_URI }}
+
     outputs:
-        CURRENT_DATE_TIME: ${{ steps.date.outputs.current_date_time }}
+      CURRENT_DATE_TIME: ${{ steps.date.outputs.current_date_time }}
 
   deploy:
     runs-on: ubuntu-latest
@@ -102,73 +92,39 @@ jobs:
     if:
       contains('
         refs/heads/qa
-        refs/heads/master
+        refs/heads/main
       ', github.ref)
       
     steps:
-    - name : Check out Git Repository
-      uses: actions/checkout@v2
+    - name: Check out Git Repository
+      uses: actions/checkout@v3
       
-    - name : Download apk-files Artifactory
+    - name: Download APK artifact
       uses: actions/download-artifact@v3
       with:
-        name: apk-files-artifactory
+        name: apk-files-s3
         path: ${{ github.workspace }}/apk-files/
-    - name: Display structure of downloaded files of Artifact 
+
+    - name: Display downloaded files
       run: ls -R
       working-directory: ${{ github.workspace }}/apk-files/
-      
-    - name: Public IP of Github Hosted Runner
-      id: ip
-      uses: haythem/public-ip@v1.3
-      
-    
-    - name: Add Github Actions IP to Security group
-      run: |
-         aws ec2 authorize-security-group-ingress --group-id ${{ secrets.JFROG_SG_ID }} --protocol tcp --port 8082 --cidr ${{ steps.ip.outputs.ipv4 }}/32
-      env:
-        AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
-        AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-        AWS_DEFAULT_REGION: 'us-east-1'
 
-    - uses: jfrog/setup-jfrog-cli@v3
-      with:
-        version: latest
-      env:
-          # JFrog platform url (for example: https://acme.jfrog.io)
-          JF_URL: ${{ secrets.JF_URL }}
-          JF_ACCESS_TOKEN: ${{ secrets.JF_ACCESS_TOKEN }}
-
-    - name: Create folder for qa and master branch in apk-files
+    - name: Organise by branch
       run: |
         if [[ ${{ github.ref }} == 'refs/heads/qa' ]]; then
-             cd ${{ github.workspace }}/apk-files && mkdir -p qa && mv debug/ qa/ && mv release/ qa/
-        elif [[ ${{ github.ref }} == 'refs/heads/master' ]]; then
-             cd ${{ github.workspace }}/apk-files && mkdir -p master && mv debug/ master/ && mv release/ master/
+          cd ${{ github.workspace }}/apk-files && mkdir -p qa && mv debug/ qa/ && mv release/ qa/
+        elif [[ ${{ github.ref }} == 'refs/heads/main' ]]; then
+          cd ${{ github.workspace }}/apk-files && mkdir -p main && mv debug/ main/ && mv release/ main/
         fi
 
-    - name: Upload APK files to Jfrog
-      run: |
-         if [[ ${{ github.ref }} == 'refs/heads/qa' ]]; then
-            jf rt u --url ${{ secrets.JF_URL }} --user ${{ secrets.JF_USER }} --password ${{ secrets.JF_PASSWORD }} apk-files/qa/debug/app-debug-${{ needs.build.outputs.CURRENT_DATE_TIME }}.apk android-artifact/
-            jf rt u --url ${{ secrets.JF_URL }} --user ${{ secrets.JF_USER }} --password ${{ secrets.JF_PASSWORD }} apk-files/qa/release/app-release-unsigned-${{ needs.build.outputs.CURRENT_DATE_TIME }}.apk android-artifact/
-         elif [[ ${{ github.ref }} == 'refs/heads/master' ]]; then
-            jf rt u --url ${{ secrets.JF_URL }} --user ${{ secrets.JF_USER }} --password ${{ secrets.JF_PASSWORD }} apk-files/master/debug/app-debug-${{ needs.build.outputs.CURRENT_DATE_TIME }}.apk android-artifact/
-            jf rt u --url ${{ secrets.JF_URL }} --user ${{ secrets.JF_USER }} --password ${{ secrets.JF_PASSWORD }} apk-files/master/release/app-release-unsigned-${{ needs.build.outputs.CURRENT_DATE_TIME }}.apk android-artifact/
-         fi
-
-    - name: Remove Github Actions IP from security group
-      run: |
-        aws ec2 revoke-security-group-ingress --group-id ${{ secrets.JFROG_SG_ID }} --protocol tcp --port 8082 --cidr ${{ steps.ip.outputs.ipv4 }}/32
+    - name: Upload APKs to S3
       env:
         AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
         AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-        AWS_DEFAULT_REGION: ${{ env.AWS_DEFAULT_REGION }}
-      if: always()
-      
-    - name : Notification to Teams
-      uses: toko-bifrost/ms-teams-deploy-card@master #  or "./" if in a local set-up
-      if: always()
-      with:
-          github-token: ${{ secrets.CI_GITHUB_TOKEN  }}
-          webhook-uri: ${{ secrets.MS_TEAMS_WEBHOOK_URI }}
+        AWS_DEFAULT_REGION: ap-south-1
+      run: |
+        if [[ ${{ github.ref }} == 'refs/heads/qa' ]]; then
+          aws s3 cp apk-files/qa/ s3://android-apk-artifacts/qa/ --recursive
+        elif [[ ${{ github.ref }} == 'refs/heads/main' ]]; then
+          aws s3 cp apk-files/main/ s3://android-apk-artifacts/main/ --recursive
+        fi
